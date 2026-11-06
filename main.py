@@ -1,17 +1,18 @@
 import threading
-from datos import PEDIDOS, REPOSICIONES, NUM_CAJAS, NUM_TERMINALES, NUM_REVISORES
-from inventario import inventario
+from datos import STOCK_INICIAL, PEDIDOS, REPOSICIONES, NUM_CAJAS, NUM_TERMINALES, NUM_REVISORES
+from inventario import GestorInventario
 from hilos import Caja, Almacen, Revisor
  
  
 def main():
+    gestor = GestorInventario(STOCK_INICIAL)
     terminales = threading.Semaphore(NUM_TERMINALES)
  
     cajas = []
     for i in range(NUM_CAJAS):
         mis_pedidos = PEDIDOS[i::NUM_CAJAS]
-        cajas.append(Caja(f"caja-{i + 1}", mis_pedidos, terminales))
-    almacen = Almacen(REPOSICIONES)
+        cajas.append(Caja(f"caja-{i + 1}", mis_pedidos, terminales, gestor))
+    almacen = Almacen(REPOSICIONES, gestor)
  
     print("--- VENTAS Y REPOSICIONES ---")
     for caja in cajas:
@@ -22,12 +23,12 @@ def main():
     almacen.join()
  
     print("\n--- REVISIÓN FINAL ---")
-    productos = list(inventario)
+    productos = gestor.productos()
     barrera = threading.Barrier(NUM_REVISORES)
     revisores = []
     for i in range(NUM_REVISORES):
         mis_productos = productos[i::NUM_REVISORES]
-        revisores.append(Revisor(f"revisor-{i + 1}", mis_productos, barrera))
+        revisores.append(Revisor(f"revisor-{i + 1}", mis_productos, barrera, gestor))
  
     for revisor in revisores:
         revisor.start()
@@ -35,7 +36,7 @@ def main():
         revisor.join()
  
     print("\nSTOCK FINAL")
-    for producto, unidades in inventario.items():
+    for producto, unidades in gestor.resumen().items():
         print(f"  {producto}: {unidades}")
  
  

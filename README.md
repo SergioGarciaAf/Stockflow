@@ -6,7 +6,7 @@ StockFlow simula una tienda en la que varias **cajas** venden pedidos **a la vez
  
 El proyecto se hace por fases: primero se programa **sin sincronización**, para ver el fallo, y después se va corrigiendo con `Lock`, `Semaphore`, `Condition`, `Barrier` y `RLock`.
  
-> Estado actual: **Fase 5** (inventario protegido con `Lock`, terminales limitados con `Semaphore`, reposición con `Condition` y revisión final con `Barrier`).
+> Estado actual: **Fase 6** (el inventario es una clase, `GestorInventario`, protegida con `RLock`; terminales con `Semaphore`, reposición con `Condition` y revisión final con `Barrier`).
  
 ## Cómo ejecutarlo
  
@@ -22,9 +22,9 @@ py prueba_carrera.py    # 6 cajas compiten a la vez por el mismo producto
 ```text
 stockflow/
 ├── datos.py             # datos de partida del profesor (no se modifica)
-├── inventario.py        # el inventario compartido, su Lock, su Condition, vender(), reponer() y consultar()
-├── hilos.py             # las clases Caja, Almacen y Revisor (cada una es un hilo)
-├── main.py              # lanza cajas y almacén; después, los 4 revisores con la barrera
+├── inventario.py        # la clase GestorInventario: stock, RLock, Condition y sus métodos
+├── hilos.py             # las clases Caja, Almacen y Revisor (hilos que reciben el gestor)
+├── main.py              # crea el gestor; lanza cajas y almacén; después, los 4 revisores
 ├── prueba_carrera.py    # 6 cajas compiten por el mismo producto a la vez
 ├── README.md
 └── .gitignore
@@ -517,6 +517,120 @@ Lo que demuestra que la barrera funciona: **los 4 «espero en la barrera» salen
  
 Con la `Barrier`, ningún revisor da su parte por cerrada hasta que han terminado los 4, y el resumen final sale solo después de superar la barrera.
  
+## Fase 6 · Refactorización con RLock
+ 
+### El problema
+ 
+Hasta ahora el inventario eran variables y funciones sueltas en `inventario.py` (`inventario`, `lock`, `condicion`, `vender()`…). El enunciado pide:
+ 
+1. **Organizar el inventario en una clase.**
+2. Que haya **al menos una operación protegida que llame a otra operación protegida** del mismo gestor.
+3. Usar **`RLock`** para que eso funcione, y explicar por qué.
+### Qué he cambiado
+ 
+Todo lo del inventario está ahora dentro de la clase `GestorInventario`, en `inventario.py`:
+ 
+```python
+class GestorInventario:
+    def __init__(self, stock_inicial):
+        self._stock = dict(stock_inicial)
+        self._lock = threading.RLock()                  # antes era Lock
+        self._condicion = threading.Condition(self._lock)
+ 
+    def consultar(self, producto): ...    # con self._lock
+    def vender(self, caja, numero_pedido, producto, unidades, esperar=True): ...
+    def reponer(self, quien, numero_albaran, producto, unidades): ...
+    def productos(self): ...              # la lista de nombres, para los revisores
+    def resumen(self): ...                # la foto final del inventario
+```
+ 
+El código de `vender()` y `reponer()` es **el mismo** que en la fase 4; solo cambian los nombres:
+ 
+| Antes (fases 1 a 5) | Ahora (dentro de la clase) |
+|---|---|
+| `inventario = dict(STOCK_INICIAL)` | `self._stock = dict(stock_inicial)` |
+| `lock = threading.Lock()` | `self._lock = threading.RLock()` |
+| `condicion = threading.Condition(lock)` | `self._condicion = threading.Condition(self._lock)` |
+| `def vender(caja, ...)` | `def vender(self, caja, ...)` |
+| `vender(...)` desde `hilos.py` | `self.gestor.vender(...)` |
+ 
+En `main.py` creo **un solo** gestor y se lo paso a todos los hilos:
+ 
+```python
+gestor = GestorInventario(STOCK_INICIAL)
+ 
+Caja(f"caja-{i + 1}", mis_pedidos, terminales, gestor)
+Almacen(REPOSICIONES, gestor)
+Revisor(f"revisor-{i + 1}", mis_productos, barrera, gestor)
+```
+ 
+Las clases de `hilos.py` guardan el gestor en `self.gestor` y usan sus métodos (`self.gestor.vender(...)`, `self.gestor.reponer(...)`, `self.gestor.consultar(...)`). Ya no importan nada de `inventario.py`. `prueba_carrera.py` crea su propio gestor y usa `target=gestor.vender`.
+ 
+### La operación protegida que llama a otra protegida
+ 
+```python
+def resumen(self):
+    with self._lock:                                    # 1. coge el cerrojo
+        copia = {}
+        for producto in self._stock:
+            copia[producto] = self.consultar(producto)  # 2. llama a otro método...
+        return copia
+ 
+def consultar(self, producto):
+    with self._lock:                                    # 3. ...que coge el MISMO cerrojo
+        return self._stock[producto]
+```
+ 
+`resumen()` coge el cerrojo para hacer una **foto completa** del inventario, de una vez, sin que nadie cambie nada en medio. Dentro llama a `consultar()`, que también coge el cerrojo. Es **el mismo hilo** cogiendo **el mismo cerrojo** dos veces.
+ 
+### Por qué hace falta RLock
+ 
+- **Con `Lock`:** el hilo coge el cerrojo en `resumen()` y, sin haberlo soltado, lo vuelve a pedir en `consultar()`. Como el cerrojo está cogido, se queda esperando a que lo suelten… pero quien lo tiene es **él mismo**. Se espera a sí mismo para siempre, sin dar ningún error.
+- **Con `RLock`** (*Reentrant Lock*, cerrojo reentrante): el cerrojo recuerda **qué hilo** lo tiene y lleva un **contador**. Si el mismo hilo lo vuelve a pedir, le deja entrar y suma 1. Cada vez que sale de un `with`, resta 1. Cuando el contador vuelve a 0, queda libre para los demás hilos. Los **otros** hilos siguen esperando igual que con un `Lock`.
+La `Condition` funciona igual con el `RLock`: `wait()` lo suelta mientras la caja duerme y lo recupera al despertar.
+ 
+No uso `RLock` «por si acaso». Hasta la fase 5 bastaba con `Lock`. Lo cambio ahora porque `resumen()` llama a `consultar()` y sin reentrada se bloquearía.
+ 
+### Decisiones importantes
+ 
+- **Por qué una clase:** todo lo del inventario (el stock, su cerrojo, su `Condition` y sus operaciones) está junto en un solo objeto. Desde fuera solo se usan los métodos, y nadie toca el diccionario directamente.
+- **El guion bajo delante** (`_stock`, `_lock`, `_condicion`) significa «de uso interno, no lo toques desde fuera de la clase».
+- **Un solo gestor para todos los hilos.** Si cada caja creara su propio `GestorInventario`, cada una tendría su propio inventario y su propio cerrojo, y no compartirían nada.
+- **`stock_inicial` se pasa al crear el gestor** en vez de importarlo dentro de la clase. Así `prueba_carrera.py` puede crear otro gestor distinto para su prueba.
+### Prueba: Lock frente a RLock
+ 
+Para comprobar que el `RLock` hace falta de verdad, he puesto **a propósito** `threading.Lock()` en el `__init__` y he ejecutado `py main.py`:
+ 
+> **Pon aquí el final de tu salida con `Lock`**, y borra este aviso. Debería salir algo como esto:
+ 
+```text
+[revisor-4] barrera superada
+ 
+STOCK FINAL
+```
+ 
+Se queda ahí, **colgado**: `resumen()` coge el cerrojo, llama a `consultar()`, este lo vuelve a pedir y el hilo se espera a sí mismo. He tenido que salir con **Ctrl+C**.
+ 
+Después he vuelto a poner `threading.RLock()`:
+ 
+> **Pon aquí el final de tu salida con `RLock`**, y borra este aviso. Debería salir algo como esto:
+ 
+```text
+STOCK FINAL
+  Teclado mecanico: 13
+  Teclado inalambrico: 7
+  ...
+  Toner negro: 14
+```
+ 
+Termina y muestra el stock final. También he comprobado que la versión con clase sigue haciendo lo mismo que antes: 40 ventas, 0 rechazos, el mismo stock final en todas las ejecuciones, y `py prueba_carrera.py` sigue dando 3 ventas, 3 rechazos y stock 0.
+ 
+> **Pon aquí cuántas veces lo has ejecutado.**
+ 
+### Conclusión
+ 
+El inventario es ahora un objeto `GestorInventario` que guarda su stock y su cerrojo. `resumen()` es una operación protegida que llama a otra operación protegida, `consultar()`, del mismo gestor y desde el mismo hilo. Con un `Lock` normal eso se bloquea; con un `RLock` funciona, porque el mismo hilo puede volver a coger el cerrojo que ya tiene.
+ 
 ## Pruebas realizadas
  
 | Prueba | Cómo la hago | Resultado |
@@ -532,6 +646,9 @@ Con la `Barrier`, ningún revisor da su parte por cerrada hasta que han terminad
 | La prueba de la carrera sigue bien | `py prueba_carrera.py` con `esperar=False` (fase 4) | Sigue saliendo 3 ventas, 3 rechazos y stock final 0. |
 | Comprobar que los revisores esperan en la Barrier | `py main.py` (fase 5) | Los 4 «espero en la barrera» salen antes que cualquier «barrera superada». revisor-1 llega el último y los otros 3 le esperan. |
 | Mostrar el resumen solo después de la barrera | `py main.py` (fase 5) | «STOCK FINAL» sale siempre después de los 4 «barrera superada». |
+| Operación protegida que llama a otra protegida, con `Lock` | `py main.py` poniendo `threading.Lock()` en el gestor (fase 6) | Escribe «STOCK FINAL» y se queda colgado: `resumen()` llama a `consultar()` y el hilo se espera a sí mismo. |
+| La misma operación con `RLock` | `py main.py` con `threading.RLock()` (fase 6) | Termina y muestra el stock final. |
+| Ejecutar varias veces la versión con clase | `py main.py` y `py prueba_carrera.py` (fase 6) | 40 ventas, 0 rechazos y el mismo stock final; la prueba sigue saliendo 3 ventas, 3 rechazos y stock 0. |
  
 ## Ramas y commits
  
@@ -541,4 +658,5 @@ Con la `Barrier`, ningún revisor da su parte por cerrada hasta que han terminad
 - `feature/lock-inventario`: fase 2, ya juntada con `develop`.
 - `feature/semaphore-terminales`: fase 3, ya juntada con `develop`.
 - `feature/condition-reposicion`: fase 4, ya juntada con `develop`.
-- `feature/barrier-inventario`: fase 5, creada desde `develop` actualizado y juntada con `develop` al terminar.
+- `feature/barrier-inventario`: fase 5, ya juntada con `develop`.
+- `feature/rlock-gestor`: fase 6, creada desde `develop` actualizado y juntada con `develop` al terminar.
