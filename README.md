@@ -6,14 +6,14 @@ StockFlow simula una tienda en la que varias **cajas** venden pedidos **a la vez
 
 El proyecto se hace por fases: primero se programa **sin sincronización**, para ver el fallo, y después se va corrigiendo con `Lock`, `Semaphore`, `Condition`, `Barrier` y `RLock`.
 
-> Estado actual: **Fase 2** (el inventario está protegido con un `Lock`).
+> Estado actual: **Fase 3** (inventario protegido con `Lock` y terminales de cobro limitados con `Semaphore`).
 
 ## Cómo ejecutarlo
 
 Necesitas Python 3 (yo uso Python 3.14 en Windows). Desde la carpeta del proyecto:
 
 ```powershell
-py main.py              # las 6 cajas procesan los 40 pedidos
+py main.py              # las 6 cajas procesan los 40 pedidos usando 3 terminales
 py prueba_carrera.py    # 6 cajas compiten a la vez por el mismo producto
 ```
 
@@ -23,8 +23,8 @@ py prueba_carrera.py    # 6 cajas compiten a la vez por el mismo producto
 stockflow/
 ├── datos.py             # datos de partida del profesor (no se modifica)
 ├── inventario.py        # el inventario compartido, su Lock y la función vender()
-├── hilos.py             # la clase Caja (un hilo que procesa sus pedidos)
-├── main.py              # reparte los pedidos, crea las 6 cajas, las lanza y las espera
+├── hilos.py             # la clase Caja (un hilo que cobra sus pedidos en un terminal)
+├── main.py              # crea el semáforo de terminales y las 6 cajas, las lanza y las espera
 ├── prueba_carrera.py    # 6 cajas compiten por el mismo producto a la vez
 ├── README.md
 └── .gitignore
@@ -195,6 +195,96 @@ El stock final sale igual que antes (39 ventas, y PED-040 rechazado porque pide 
 
 Con el `Lock`, leer, comprobar y descontar se hacen como una sola operación y de una caja en una. El stock ya no puede quedar en valores incoherentes: nunca se venden unidades que no existen.
 
+## Fase 3 · Terminales limitados con Semaphore
+
+### El problema
+
+Hay **6 cajas** pero solo **3 terminales de cobro** (`NUM_TERMINALES = 3` en `datos.py`). Como mucho 3 cajas pueden estar cobrando a la vez; las demás tienen que esperar a que se quede un terminal libre.
+
+### Qué he cambiado
+
+En `main.py` creo **un** semáforo y se lo paso a las 6 cajas:
+
+```python
+terminales = threading.Semaphore(NUM_TERMINALES)   # 3 plazas
+
+cajas.append(Caja(f"caja-{i + 1}", mis_pedidos, terminales))
+```
+
+En `hilos.py`, la caja guarda el semáforo y lo usa al procesar cada pedido:
+
+```python
+def run(self):
+    for numero_pedido, producto, unidades in self.pedidos:
+        print(f"[{self.name}] espero terminal para {numero_pedido}")
+        with self.terminales:                      # coge un terminal (o espera)
+            print(f"[{self.name}] COJO terminal")
+            vender(self.name, numero_pedido, producto, unidades)
+            time.sleep(0.1)                        # cobrar
+            print(f"[{self.name}] SUELTO terminal")
+                                                   # aquí lo suelta
+```
+
+`inventario.py` no cambia: el `Lock` sigue ahí.
+
+### Para qué sirve el Semaphore
+
+Un `Semaphore(3)` es un **aforo de 3**: es como tener 3 llaves en vez de una. Cada caja que entra en `with self.terminales:` coge una plaza; si las 3 están ocupadas, la caja espera ahí hasta que otra salga y deje su plaza libre.
+
+Los mensajes «espero terminal», «COJO terminal» y «SUELTO terminal» sirven para **ver en la salida** cuándo una caja pide, obtiene y libera un terminal, como pide el enunciado.
+
+### Semaphore y Lock resuelven problemas distintos
+
+| | `Semaphore(3)` | `Lock` |
+|---|---|---|
+| Qué protege | los terminales de cobro | el inventario |
+| Cuántas cajas dentro a la vez | hasta 3 | solo 1 |
+| Pregunta que responde | ¿cuántas cajas pueden cobrar a la vez? | ¿quién puede tocar el stock ahora? |
+
+El semáforo **no** sirve para proteger el inventario: dentro de él puede haber 3 cajas a la vez, y esas 3 podrían leer y descontar el mismo producto a la vez (la carrera de la fase 1). Por eso se mantiene el `Lock` en `vender()`: cada mecanismo resuelve su propio problema.
+
+### Decisiones importantes
+
+- **Un solo semáforo, creado en `main.py`.** Se crea antes que las cajas y se le pasa el **mismo** objeto a las 6. Si cada caja creara su propio `Semaphore(3)`, cada una tendría 3 terminales para ella sola y no habría ningún límite.
+- **Uso `NUM_TERMINALES`, no el número 3 a mano.** Si cambian los datos, el programa sigue funcionando sin tocar el código.
+- **El orden es siempre el mismo:** primero el terminal (`with self.terminales:`) y después, dentro de `vender()`, el cerrojo del inventario. Ninguna parte del programa coge el cerrojo y luego un terminal. Esto es importante para evitar bloqueos (lo analizo en la fase 7).
+- **Cobrar (`time.sleep(0.1)`) se hace con el terminal, pero fuera del Lock.** Cobrar no toca el inventario, así que mientras una caja cobra, otra puede estar usando el inventario.
+
+### Prueba: más cajas que terminales
+
+Ejecuto `py main.py`:
+
+> **Pon aquí un trozo de tu salida** donde se vean «espero terminal», «COJO» y «SUELTO», y borra este aviso. Debería salir algo como esto:
+
+```text
+[caja-1] espero terminal para PED-001
+[caja-1] COJO terminal
+[caja-2] espero terminal para PED-002
+[caja-2] COJO terminal
+[caja-3] espero terminal para PED-003
+[caja-3] COJO terminal
+[caja-4] espero terminal para PED-004
+[caja-5] espero terminal para PED-005
+[caja-6] espero terminal para PED-006
+[caja-1] PED-001: vendo 4 x Teclado mecanico -> quedan 14
+[caja-2] PED-002: vendo 5 x Raton gaming -> quedan 15
+[caja-3] PED-003: vendo 3 x Monitor 24 pulgadas -> quedan 7
+[caja-1] SUELTO terminal
+[caja-1] espero terminal para PED-007
+[caja-1] COJO terminal
+...
+```
+
+Las 6 cajas piden terminal a la vez, pero solo caja-1, caja-2 y caja-3 lo cogen. caja-4, caja-5 y caja-6 se quedan esperando. Contando los «COJO» y los «SUELTO» de toda la salida, **nunca hay más de 3 cajas con terminal a la vez**.
+
+Una cosa curiosa que he visto: caja-1, caja-2 y caja-3 hacen **todos** sus pedidos antes de que entren las otras tres. La caja que suelta el terminal lo vuelve a pedir enseguida y lo consigue antes que las que llevaban rato esperando. El `Semaphore` limita cuántas entran, pero **no garantiza el orden de llegada**.
+
+> **Pon aquí cuántas veces lo has ejecutado y cuánto tarda** (a mí, unos 2 segundos).
+
+### Conclusión
+
+Con el `Semaphore`, como mucho 3 cajas cobran a la vez, y las demás esperan sin hacer nada hasta que se libera un terminal. El `Lock` sigue protegiendo el inventario, así que el stock final sigue saliendo bien.
+
 ## Pruebas realizadas
 
 | Prueba | Cómo la hago | Resultado |
@@ -203,10 +293,12 @@ Con el `Lock`, leer, comprobar y descontar se hacen como una sola operación y d
 | Ejecutar la aplicación varias veces (fase 1) | `py main.py` (varias veces) | 39 ventas y 1 rechazo (PED-040). Con este reparto el fallo casi nunca se ve. |
 | Comprobar que Lock corrige el acceso concurrente | `py prueba_carrera.py` con el código de la fase 2 (varias veces) | Siempre 3 ventas, 3 rechazos y stock final 0. |
 | Ejecutar la aplicación varias veces (fase 2) | `py main.py` (varias veces) | Mismo stock final todas las veces; tarda unos 2 s por el cerrojo. |
+| Tener más cajas que terminales disponibles | `py main.py` con 6 cajas y 3 terminales (fase 3) | Nunca hay más de 3 «COJO terminal» sin su «SUELTO». Las demás cajas esperan. |
 
 ## Ramas y commits
 
 - `main`: versión estable (de momento, solo el inicio del proyecto).
 - `develop`: rama de integración.
 - `feature/race-condition`: fase 1, ya juntada con `develop`.
-- `feature/lock-inventario`: fase 2, creada desde `develop` actualizado y juntada con `develop` al terminar.
+- `feature/lock-inventario`: fase 2, ya juntada con `develop`.
+- `feature/semaphore-terminales`: fase 3, creada desde `develop` actualizado y juntada con `develop` al terminar.
