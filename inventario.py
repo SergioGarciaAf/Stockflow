@@ -35,3 +35,8 @@ def reponer(quien, numero_albaran, producto, unidades):
         hay = inventario[producto]
         condicion.notify_all()
     print(f"[{quien}] {numero_albaran}: repongo {unidades} x {producto} -> hay {hay}")
+
+
+def consultar(producto):
+    with lock:
+        return inventario[producto]

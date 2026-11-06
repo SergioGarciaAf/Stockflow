@@ -1,7 +1,7 @@
 import threading
-from datos import PEDIDOS, REPOSICIONES, NUM_CAJAS, NUM_TERMINALES
+from datos import PEDIDOS, REPOSICIONES, NUM_CAJAS, NUM_TERMINALES, NUM_REVISORES
 from inventario import inventario
-from hilos import Caja, Almacen
+from hilos import Caja, Almacen, Revisor
  
  
 def main():
@@ -13,13 +13,26 @@ def main():
         cajas.append(Caja(f"caja-{i + 1}", mis_pedidos, terminales))
     almacen = Almacen(REPOSICIONES)
  
+    print("--- VENTAS Y REPOSICIONES ---")
     for caja in cajas:
         caja.start()
     almacen.start()
- 
     for caja in cajas:
         caja.join()
     almacen.join()
+ 
+    print("\n--- REVISIÓN FINAL ---")
+    productos = list(inventario)
+    barrera = threading.Barrier(NUM_REVISORES)
+    revisores = []
+    for i in range(NUM_REVISORES):
+        mis_productos = productos[i::NUM_REVISORES]
+        revisores.append(Revisor(f"revisor-{i + 1}", mis_productos, barrera))
+ 
+    for revisor in revisores:
+        revisor.start()
+    for revisor in revisores:
+        revisor.join()
  
     print("\nSTOCK FINAL")
     for producto, unidades in inventario.items():

@@ -6,14 +6,14 @@ StockFlow simula una tienda en la que varias **cajas** venden pedidos **a la vez
  
 El proyecto se hace por fases: primero se programa **sin sincronización**, para ver el fallo, y después se va corrigiendo con `Lock`, `Semaphore`, `Condition`, `Barrier` y `RLock`.
  
-> Estado actual: **Fase 4** (inventario protegido con `Lock`, terminales limitados con `Semaphore` y un almacén que repone; las cajas sin stock esperan con `Condition`).
+> Estado actual: **Fase 5** (inventario protegido con `Lock`, terminales limitados con `Semaphore`, reposición con `Condition` y revisión final con `Barrier`).
  
 ## Cómo ejecutarlo
  
 Necesitas Python 3 (yo uso Python 3.14 en Windows). Desde la carpeta del proyecto:
  
 ```powershell
-py main.py              # 6 cajas venden los 40 pedidos con 3 terminales; el almacén repone
+py main.py              # ventas y reposiciones; al final, 4 revisores revisan el inventario
 py prueba_carrera.py    # 6 cajas compiten a la vez por el mismo producto
 ```
  
@@ -22,9 +22,9 @@ py prueba_carrera.py    # 6 cajas compiten a la vez por el mismo producto
 ```text
 stockflow/
 ├── datos.py             # datos de partida del profesor (no se modifica)
-├── inventario.py        # el inventario compartido, su Lock, su Condition, vender() y reponer()
-├── hilos.py             # las clases Caja y Almacen (cada una es un hilo)
-├── main.py              # crea el semáforo, las 6 cajas y el almacén, los lanza y los espera
+├── inventario.py        # el inventario compartido, su Lock, su Condition, vender(), reponer() y consultar()
+├── hilos.py             # las clases Caja, Almacen y Revisor (cada una es un hilo)
+├── main.py              # lanza cajas y almacén; después, los 4 revisores con la barrera
 ├── prueba_carrera.py    # 6 cajas compiten por el mismo producto a la vez
 ├── README.md
 └── .gitignore
@@ -400,6 +400,123 @@ También he comprobado que `py prueba_carrera.py` (ahora con `esperar=False`) si
  
 Con la `Condition`, una caja sin stock espera **dormida** (sin espera activa) y suelta el cerrojo mientras tanto. El almacén repone y avisa con `notify_all()`, y cada caja que despierta vuelve a comprobar su stock con el `while` antes de vender.
  
+## Fase 5 · Revisión final con Barrier
+ 
+### El problema
+ 
+Cuando terminan las ventas y las reposiciones, **4 revisores** (`NUM_REVISORES = 4`) se reparten los 25 productos del catálogo y comprueban el stock de cada uno. El cierre no se puede dar por bueno hasta que **los 4** hayan terminado su parte, y el resumen final solo se muestra **después**.
+ 
+### Qué he cambiado
+ 
+En `inventario.py` añado una función para **leer** el stock de un producto con el cerrojo:
+ 
+```python
+def consultar(producto):
+    with lock:                       # hasta para leer, con el cerrojo
+        return inventario[producto]
+```
+ 
+En `hilos.py` hay una clase nueva, `Revisor`:
+ 
+```python
+class Revisor(threading.Thread):
+    def __init__(self, nombre, productos, barrera):
+        super().__init__(name=nombre)
+        self.productos = list(productos)    # SU parte del catálogo
+        self.barrera = barrera              # LA barrera, la misma para los 4
+ 
+    def run(self):
+        for producto in self.productos:
+            print(f"[{self.name}] {producto}: {consultar(producto)}")
+            time.sleep(0.1)
+        print(f"[{self.name}] he terminado mi parte -> espero en la barrera")
+        self.barrera.wait()                 # espera aquí hasta que lleguen los 4
+        print(f"[{self.name}] barrera superada")
+```
+ 
+En `main.py`, **después** de los `join()` de las cajas y del almacén:
+ 
+```python
+print("\n--- REVISIÓN FINAL ---")
+productos = list(inventario)                     # los 25 nombres de producto
+barrera = threading.Barrier(NUM_REVISORES)       # UNA barrera para los 4
+ 
+revisores = []
+for i in range(NUM_REVISORES):
+    mis_productos = productos[i::NUM_REVISORES]  # uno de cada 4
+    revisores.append(Revisor(f"revisor-{i + 1}", mis_productos, barrera))
+ 
+for revisor in revisores:
+    revisor.start()
+for revisor in revisores:
+    revisor.join()
+ 
+print("\nSTOCK FINAL")                           # después de la barrera
+```
+ 
+### Para qué sirve la Barrier
+ 
+Una `Barrier(4)` es como el **autobús de una excursión**: no sale hasta que han subido los 4. Cada revisor, al terminar su parte, llama a `barrera.wait()` y se queda ahí parado. Cuando llega el cuarto, la barrera se abre y **siguen los 4 a la vez**.
+ 
+No hay que confundirla con el `Semaphore`:
+ 
+| | `Semaphore(3)` | `Barrier(4)` |
+|---|---|---|
+| Pregunta que responde | ¿**cuántos** pueden entrar a la vez? | ¿**cuándo** puede seguir el grupo? |
+| En StockFlow | como mucho 3 cajas cobrando | los 4 revisores esperan a que todos acaben |
+ 
+### Decisiones importantes
+ 
+- **El reparto del catálogo.** `list(inventario)` da solo los **nombres** de los productos, sin los números. Lo convierto en lista porque un diccionario no se puede trocear con `[i::4]`. Cada revisor se lleva uno de cada cuatro, como con los pedidos: revisor-1 se queda con 7 productos y los otros tres con 6 cada uno (25 = 7 + 6 + 6 + 6).
+- **El revisor pregunta el número en el momento** con `consultar(producto)`. Así mira el inventario real, con el cerrojo, en vez de una copia hecha antes.
+- **`consultar()` también coge el cerrojo**, aunque solo lea. Es el recurso compartido y nadie debería leerlo a medias mientras otro escribe.
+- **`Barrier(NUM_REVISORES)`, exactamente 4.** Si pusiera `Barrier(5)` con 4 revisores, los 4 esperarían para siempre a un quinto que nunca llega, y el programa se quedaría colgado.
+- **Una sola barrera**, creada en `main.py` y pasada a los 4 revisores. Si cada uno tuviera la suya, nadie esperaría a nadie.
+- **`barrera.wait()` va fuera de cualquier cerrojo.** Si un revisor esperara en la barrera con el cerrojo del inventario cogido, los demás no podrían hacer `consultar()`, nunca llegarían a la barrera y se quedarían todos atascados (lo analizo en la fase 7).
+- **La revisión empieza cuando ya han terminado las ventas**, porque `main` hace antes los `join()` de las cajas y del almacén.
+- **`join()` y `Barrier` no son lo mismo.** Con `join()`, `main` espera a que un hilo **termine del todo**. Con la `Barrier`, los hilos se esperan **entre ellos** en un punto del medio de su trabajo y, cuando llegan todos, **siguen** («barrera superada»).
+### Prueba: los revisores esperan en la Barrier
+ 
+Ejecuto `py main.py`:
+ 
+> **Pon aquí el trozo de tu salida** desde «--- REVISIÓN FINAL ---» hasta «STOCK FINAL», y borra este aviso. Debería salir algo como esto:
+ 
+```text
+--- REVISIÓN FINAL ---
+[revisor-1] Teclado mecanico: 13
+[revisor-2] Teclado inalambrico: 7
+[revisor-3] Raton gaming: 18
+[revisor-4] Raton oficina: 7
+...
+[revisor-3] he terminado mi parte -> espero en la barrera
+[revisor-2] he terminado mi parte -> espero en la barrera
+[revisor-4] he terminado mi parte -> espero en la barrera
+[revisor-1] he terminado mi parte -> espero en la barrera
+[revisor-1] barrera superada
+[revisor-3] barrera superada
+[revisor-2] barrera superada
+[revisor-4] barrera superada
+ 
+STOCK FINAL
+...
+```
+ 
+Así pasa, momento a momento (a 0,1 s por producto):
+ 
+| Momento | revisor-1 (7 productos) | revisores 2, 3 y 4 (6 productos) |
+|---|---|---|
+| 0,6 s | todavía revisando su último producto | terminan → `wait()`: esperan en la barrera |
+| 0,7 s | termina → `wait()`: es el cuarto en llegar | — |
+| justo después | la barrera se abre: los 4 siguen a la vez | |
+ 
+Lo que demuestra que la barrera funciona: **los 4 «espero en la barrera» salen antes que cualquier «barrera superada»**. revisor-1 llega el último porque tiene un producto más, y los otros 3 le esperan. Después de los 4 «barrera superada» sale el «STOCK FINAL».
+ 
+> **Pon aquí cuántas veces lo has ejecutado** y si siempre sale en ese orden (el orden de los revisores puede cambiar, pero nunca puede salir un «superada» antes del cuarto «espero»).
+ 
+### Conclusión
+ 
+Con la `Barrier`, ningún revisor da su parte por cerrada hasta que han terminado los 4, y el resumen final sale solo después de superar la barrera.
+ 
 ## Pruebas realizadas
  
 | Prueba | Cómo la hago | Resultado |
@@ -413,6 +530,8 @@ Con la `Condition`, una caja sin stock espera **dormida** (sin espera activa) y 
 | Comprobar que una reposición permite continuar a una caja en espera | `py main.py` (fase 4) | Cuando llega ALB-005 (+5 Router WiFi, hay 8), caja-4 despierta y vende 4. Quedan 4. |
 | Ejecutar la aplicación varias veces (fase 4) | `py main.py` (varias veces) | 40 ventas, 0 rechazos y el mismo stock final todas las veces. |
 | La prueba de la carrera sigue bien | `py prueba_carrera.py` con `esperar=False` (fase 4) | Sigue saliendo 3 ventas, 3 rechazos y stock final 0. |
+| Comprobar que los revisores esperan en la Barrier | `py main.py` (fase 5) | Los 4 «espero en la barrera» salen antes que cualquier «barrera superada». revisor-1 llega el último y los otros 3 le esperan. |
+| Mostrar el resumen solo después de la barrera | `py main.py` (fase 5) | «STOCK FINAL» sale siempre después de los 4 «barrera superada». |
  
 ## Ramas y commits
  
@@ -421,4 +540,5 @@ Con la `Condition`, una caja sin stock espera **dormida** (sin espera activa) y 
 - `feature/race-condition`: fase 1, ya juntada con `develop`.
 - `feature/lock-inventario`: fase 2, ya juntada con `develop`.
 - `feature/semaphore-terminales`: fase 3, ya juntada con `develop`.
-- `feature/condition-reposicion`: fase 4, creada desde `develop` actualizado y juntada con `develop` al terminar.
+- `feature/condition-reposicion`: fase 4, ya juntada con `develop`.
+- `feature/barrier-inventario`: fase 5, creada desde `develop` actualizado y juntada con `develop` al terminar.
