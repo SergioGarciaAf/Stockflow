@@ -60,9 +60,7 @@ El `time.sleep(0.05)` entre comprobar y descontar está **a propósito**: hace m
 Hay **6 Router WiFi**, y **6 cajas piden 2 cada una, a la vez**.
 
 - **Lo que debería pasar:** venden 3 cajas (quedan 4, 2 y 0) y las otras 3 dicen «NO hay bastante». Stock final: **0**.
-- **Lo que pasa sin Lock** (con el código de la fase 1; desde la fase 2, esta misma prueba ya sale bien):
-
-> **Pon aquí tu salida.** Copia lo que te sale al ejecutar `py prueba_carrera.py` y borra este aviso. Debería salir algo como esto:
+- **Lo que pasa sin Lock** (con el código de la fase 1; desde la fase 2, esta misma prueba ya sale bien). Esta es mi salida de `py prueba_carrera.py`:
 
 ```text
 Hay 6 unidades de Router WiFi
@@ -96,7 +94,9 @@ Así pasa, momento a momento:
 
 Ninguna caja ve lo que hizo la otra, porque todas calcularon a partir del 6 que leyeron al principio. Esto es una **condición de carrera**: el resultado depende del orden en que los hilos llegan al recurso compartido.
 
-> **Pon aquí cuántas veces lo has ejecutado** (por ejemplo: «Lo he ejecutado 3 veces y las 3 ha salido stock final 4»).
+Lo he ejecutado **5 veces** y las 5 ha pasado lo mismo: venden las 6 cajas y el stock final sale **4**.
+
+En 2 de esas ejecuciones, dos mensajes salieron pegados en la misma línea (por ejemplo `... quedan 4[caja-2] PRUEBA-2: ...`). Es porque varias cajas escriben en la consola a la vez y `print` no es atómico. Solo afecta a cómo se ven los mensajes, no al stock. Pasa también en las demás fases.
 
 ### ¿Por qué en `main.py` casi nunca se ve el fallo?
 
@@ -104,7 +104,7 @@ Al ejecutar `py main.py` varias veces, el stock final sale bien: 39 ventas, y PE
 
 Que no se vea **no significa que esté bien**: la carrera es posible, pero depende de la casualidad. Por eso hace falta una prueba aparte (`prueba_carrera.py`) que la provoque siempre.
 
-> **Pon aquí cuántas veces has ejecutado `main.py`** y qué te ha salido.
+He ejecutado `py main.py` **5 veces**: las 5 han dado 39 ventas, 1 rechazo (PED-040: «NO hay bastante Router WiFi (hay 3, pide 4)») y exactamente el mismo stock final. Tarda menos de medio segundo (unos 0,4 s).
 
 ### Conclusión
 
@@ -152,9 +152,7 @@ Uso `with lock:` en vez de `lock.acquire()` y `lock.release()` porque el `with` 
 
 ### Prueba: la misma carrera, ahora con Lock
 
-Ejecuto otra vez `py prueba_carrera.py`, con los mismos 6 routers y las mismas 6 cajas que piden 2:
-
-> **Pon aquí tu salida** de `py prueba_carrera.py` y borra este aviso. Debería salir algo como esto (el orden de las cajas puede cambiar, los números no):
+Ejecuto otra vez `py prueba_carrera.py`, con los mismos 6 routers y las mismas 6 cajas que piden 2. Esta es mi salida:
 
 ```text
 Hay 6 unidades de Router WiFi
@@ -183,13 +181,13 @@ Ahora sale lo correcto: **3 ventas, 3 rechazos y stock final 0**. Momento a mome
 
 Cada caja lee el stock **después** de que la anterior haya descontado, porque no puede entrar hasta que la otra suelta el cerrojo.
 
-> **Pon aquí cuántas veces lo has ejecutado** (por ejemplo: «Lo he ejecutado 3 veces y las 3 ha salido stock final 0»).
+Lo he ejecutado **5 veces** y las 5 ha salido lo mismo: 3 ventas, 3 rechazos y stock final **0**.
 
 ### `main.py` con Lock
 
 El stock final sale igual que antes (39 ventas, y PED-040 rechazado porque pide 4 Router WiFi y quedan 3), pero ahora **tarda más**: unos 2 segundos, en vez de menos de medio. Cada venta tiene el cerrojo cogido 0,05 s y las ventas van de una en una: 40 × 0,05 s ≈ 2 s. Es el precio de sincronizar: se gana corrección pero se pierde concurrencia. Por eso la sección crítica tiene que ser lo más pequeña posible.
 
-> **Pon aquí cuánto te tarda** y cuántas veces lo has ejecutado.
+Lo he ejecutado **5 veces**: siempre 39 ventas, 1 rechazo y el mismo stock final, y siempre tarda unos **2 segundos**.
 
 ### Conclusión
 
@@ -252,9 +250,7 @@ El semáforo **no** sirve para proteger el inventario: dentro de él puede haber
 
 ### Prueba: más cajas que terminales
 
-Ejecuto `py main.py`:
-
-> **Pon aquí un trozo de tu salida** donde se vean «espero terminal», «COJO» y «SUELTO», y borra este aviso. Debería salir algo como esto:
+Ejecuto `py main.py`. Este es el principio de mi salida:
 
 ```text
 [caja-1] espero terminal para PED-001
@@ -268,18 +264,25 @@ Ejecuto `py main.py`:
 [caja-6] espero terminal para PED-006
 [caja-1] PED-001: vendo 4 x Teclado mecanico -> quedan 14
 [caja-2] PED-002: vendo 5 x Raton gaming -> quedan 15
-[caja-3] PED-003: vendo 3 x Monitor 24 pulgadas -> quedan 7
 [caja-1] SUELTO terminal
 [caja-1] espero terminal para PED-007
 [caja-1] COJO terminal
+[caja-3] PED-003: vendo 3 x Monitor 24 pulgadas -> quedan 7
+[caja-2] SUELTO terminal
+[caja-2] espero terminal para PED-008
+[caja-1] PED-007: vendo 6 x Teclado mecanico -> quedan 8
+[caja-2] COJO terminal
+[caja-3] SUELTO terminal
+[caja-3] espero terminal para PED-009
+[caja-3] COJO terminal
 ...
 ```
 
 Las 6 cajas piden terminal a la vez, pero solo caja-1, caja-2 y caja-3 lo cogen. caja-4, caja-5 y caja-6 se quedan esperando. Contando los «COJO» y los «SUELTO» de toda la salida, **nunca hay más de 3 cajas con terminal a la vez**.
 
-Una cosa curiosa que he visto: caja-1, caja-2 y caja-3 hacen **todos** sus pedidos antes de que entren las otras tres. La caja que suelta el terminal lo vuelve a pedir enseguida y lo consigue antes que las que llevaban rato esperando. El `Semaphore` limita cuántas entran, pero **no garantiza el orden de llegada**.
+Una cosa curiosa que he visto en 3 de mis 5 ejecuciones: caja-1, caja-2 y caja-3 hacen **todos** sus pedidos antes de que entren las otras tres. La caja que suelta el terminal lo vuelve a pedir enseguida y lo consigue antes que las que llevaban rato esperando. En las otras 2 ejecuciones, caja-4 consiguió uno de los primeros terminales, porque los hilos no siempre arrancan en el mismo orden. El `Semaphore` limita cuántas entran, pero **no garantiza el orden de llegada**.
 
-> **Pon aquí cuántas veces lo has ejecutado y cuánto tarda** (a mí, unos 2 segundos).
+Lo he ejecutado **5 veces**. En las 5 hay como mucho 3 cajas con terminal a la vez, 39 ventas, 1 rechazo (PED-040) y el mismo stock final. Tarda unos **2,1 segundos**.
 
 ### Conclusión
 
@@ -371,10 +374,15 @@ Hay dos esperas diferentes y no hay que confundirlas:
 
 Ejecuto `py main.py`. El pedido que tiene que esperar es **PED-040** (caja-4): pide **4 Router WiFi** y solo quedan **3**, porque PED-025 ya vendió 3 de los 6.
 
-> **Pon aquí el trozo de tu salida** con PED-040 y el almacén, y borra este aviso. Debería salir algo como esto:
+Este es el trozo de mi salida con PED-040 y el almacén:
 
 ```text
+[caja-4] espero terminal para PED-040
+[caja-4] COJO terminal
+[caja-6] PED-036: vendo 7 x Teclado mecanico -> quedan 1
 [caja-4] PED-040: espero reposición de Router WiFi (hay 3, pide 4)
+[caja-5] SUELTO terminal
+[caja-6] SUELTO terminal
 [almacen] ALB-003: repongo 10 x SSD 1 TB -> hay 13
 [caja-4] PED-040: espero reposición de Router WiFi (hay 3, pide 4)
 [almacen] ALB-004: repongo 6 x Disco externo 2 TB -> hay 6
@@ -397,11 +405,9 @@ Así pasa, momento a momento:
 
 Con la reposición, ya no se rechaza ningún pedido: **40 ventas y 0 rechazos**, y el stock final sale igual en todas las ejecuciones. Tarda unos 5 segundos, porque el almacén tarda 1,5 s en empezar y reparte un albarán cada 0,3 s.
 
-> **Pon aquí cuántas veces lo has ejecutado y cuánto tarda.**
+Lo he ejecutado **5 veces**: en las 5, PED-040 espera 3 veces y vende con ALB-005, hay 40 ventas y 0 rechazos, y el stock final es el mismo. Tarda unos **5,1 segundos**.
 
-También he comprobado que `py prueba_carrera.py` (ahora con `esperar=False`) sigue saliendo bien: 3 ventas, 3 rechazos y stock final 0.
-
-> **Pon aquí tu salida de `py prueba_carrera.py`**, o di que sale igual que en la fase 2.
+También he comprobado que `py prueba_carrera.py` (ahora con `esperar=False`) sigue saliendo bien: lo he ejecutado 5 veces y la salida es igual que en la fase 2, con 3 ventas, 3 rechazos y stock final 0.
 
 ### Conclusión
 
@@ -485,9 +491,7 @@ No hay que confundirla con el `Semaphore`:
 
 ### Prueba: los revisores esperan en la Barrier
 
-Ejecuto `py main.py`:
-
-> **Pon aquí el trozo de tu salida** desde «--- REVISIÓN FINAL ---» hasta «STOCK FINAL», y borra este aviso. Debería salir algo como esto:
+Ejecuto `py main.py`. Este es el trozo de mi salida desde «--- REVISIÓN FINAL ---» hasta «STOCK FINAL» (con «...» he cortado la lista de productos):
 
 ```text
 --- REVISIÓN FINAL ---
@@ -496,14 +500,15 @@ Ejecuto `py main.py`:
 [revisor-3] Raton gaming: 18
 [revisor-4] Raton oficina: 7
 ...
+[revisor-1] Toner negro: 14
 [revisor-3] he terminado mi parte -> espero en la barrera
-[revisor-2] he terminado mi parte -> espero en la barrera
 [revisor-4] he terminado mi parte -> espero en la barrera
+[revisor-2] he terminado mi parte -> espero en la barrera
 [revisor-1] he terminado mi parte -> espero en la barrera
 [revisor-1] barrera superada
-[revisor-3] barrera superada
 [revisor-2] barrera superada
 [revisor-4] barrera superada
+[revisor-3] barrera superada
 
 STOCK FINAL
 ...
@@ -519,7 +524,7 @@ Así pasa, momento a momento (a 0,1 s por producto):
 
 Lo que demuestra que la barrera funciona: **los 4 «espero en la barrera» salen antes que cualquier «barrera superada»**. revisor-1 llega el último porque tiene un producto más, y los otros 3 le esperan. Después de los 4 «barrera superada» sale el «STOCK FINAL».
 
-> **Pon aquí cuántas veces lo has ejecutado** y si siempre sale en ese orden (el orden de los revisores puede cambiar, pero nunca puede salir un «superada» antes del cuarto «espero»).
+Lo he ejecutado **5 veces**. El orden en que llegan revisor-2, revisor-3 y revisor-4 cambia de una vez a otra, pero en las 5 revisor-1 llega el último, ningún «barrera superada» sale antes del cuarto «espero en la barrera» y «STOCK FINAL» sale siempre después. Tarda unos **5,8 segundos** en total.
 
 ### Conclusión
 
@@ -612,31 +617,35 @@ No uso `RLock` «por si acaso». Hasta la fase 5 bastaba con `Lock`. Lo cambio a
 
 Para comprobar que el `RLock` hace falta de verdad, he puesto **a propósito** `threading.Lock()` en el `__init__` y he ejecutado `py main.py`:
 
-> **Pon aquí el final de tu salida con `Lock`**, y borra este aviso. Debería salir algo como esto:
+Este es el final de mi salida con `Lock`:
 
 ```text
+[revisor-1] he terminado mi parte -> espero en la barrera
+[revisor-1] barrera superada
+[revisor-3] barrera superada
+[revisor-2] barrera superada
 [revisor-4] barrera superada
 
 STOCK FINAL
 ```
 
-Se queda ahí, **colgado**: `resumen()` coge el cerrojo, llama a `consultar()`, este lo vuelve a pedir y el hilo se espera a sí mismo. He tenido que salir con **Ctrl+C**.
+Se queda ahí, **colgado**: `resumen()` coge el cerrojo, llama a `consultar()`, este lo vuelve a pedir y el hilo se espera a sí mismo. No termina nunca y hay que cortarlo con **Ctrl+C**. Lo he probado 3 veces y las 3 se queda parado en el mismo sitio, justo después de «STOCK FINAL».
 
-Después he vuelto a poner `threading.RLock()`:
-
-> **Pon aquí el final de tu salida con `RLock`**, y borra este aviso. Debería salir algo como esto:
+Después he vuelto a poner `threading.RLock()`. Este es el final de mi salida:
 
 ```text
 STOCK FINAL
   Teclado mecanico: 13
   Teclado inalambrico: 7
+  Raton gaming: 18
   ...
+  Impresora laser: 7
   Toner negro: 14
 ```
 
 Termina y muestra el stock final. También he comprobado que la versión con clase sigue haciendo lo mismo que antes: 40 ventas, 0 rechazos, el mismo stock final en todas las ejecuciones, y `py prueba_carrera.py` sigue dando 3 ventas, 3 rechazos y stock 0.
 
-> **Pon aquí cuántas veces lo has ejecutado.**
+Con `RLock` he ejecutado `py main.py` **5 veces** y `py prueba_carrera.py` otras 5. Las 5 de `main.py` terminan con 40 ventas, 0 rechazos y el mismo stock final, en unos 5,8 segundos, y las 5 de la prueba dan 3 ventas, 3 rechazos y stock 0.
 
 ### Conclusión
 
@@ -688,10 +697,11 @@ Comprobar y descontar siguen **juntos** dentro del cerrojo; solo he quitado la p
 
 Después del cambio, el programa hace lo mismo: 40 ventas, 0 rechazos y el mismo stock final. PED-040 sigue teniendo que esperar, incluso antes: como las cajas van más rápido, llega a PED-040 antes de que el almacén empiece, y «espero reposición» sale 5 veces (lo despiertan ALB-001 a ALB-004 y vende con ALB-005).
 
-> **Pon aquí el trozo de tu salida con PED-040** y borra este aviso. Debería salir algo como esto:
+Este es el trozo de mi salida con PED-040:
 
 ```text
 [caja-4] PED-040: espero reposición de Router WiFi (hay 3, pide 4)
+[caja-2] SUELTO terminal
 [almacen] ALB-001: repongo 8 x Monitor 24 pulgadas -> hay 11
 [caja-4] PED-040: espero reposición de Router WiFi (hay 3, pide 4)
 [almacen] ALB-002: repongo 6 x Monitor 27 pulgadas -> hay 7
@@ -755,7 +765,7 @@ He ejecutado la versión final **5 veces**. Todas dan 40 ventas, 0 rechazos, nin
 
 El orden de los mensajes cambia en cada ejecución, pero los números finales no.
 
-> **Comprueba que a ti también te sale esta tabla en tus 5 ejecuciones** y borra este aviso. Si algún número no coincide, algo de la sincronización falla.
+He comparado el «STOCK FINAL» de las 5 ejecuciones con esta tabla y coincide producto a producto en todas. Cada ejecución tarda unos 5,8 segundos. Si algún número no coincidiera, sería que algo de la sincronización falla.
 
 ### Conclusión
 
