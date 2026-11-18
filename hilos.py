@@ -15,7 +15,7 @@ class Caja(threading.Thread):
             with self.terminales:
                 print(f"[{self.name}] COJO terminal")
                 self.gestor.vender(self.name, numero_pedido, producto, unidades)
-                time.sleep(0.1)
+                time.sleep(1.0)
                 print(f"[{self.name}] SUELTO terminal")
  
  
@@ -26,11 +26,10 @@ class Almacen(threading.Thread):
         self.gestor = gestor
  
     def run(self):
-        time.sleep(1.5)
         for numero_albaran, producto, unidades in self.reposiciones:
             self.gestor.reponer(self.name, numero_albaran, producto, unidades)
-            time.sleep(0.3)
- 
+            time.sleep(2.0)
+
  
 class Revisor(threading.Thread):
     def __init__(self, nombre, productos, barrera, gestor):
@@ -42,7 +41,18 @@ class Revisor(threading.Thread):
     def run(self):
         for producto in self.productos:
             print(f"[{self.name}] {producto}: {self.gestor.consultar(producto)}")
-            time.sleep(0.1)
         print(f"[{self.name}] he terminado mi parte -> espero en la barrera")
         self.barrera.wait()
         print(f"[{self.name}] barrera superada")
+
+class Cancelaciones(threading.Thread):
+    def __init__(self, cancelaciones,gestor):
+        super().__init__(name="cancelaciones")
+        self.cancelaciones = cancelaciones
+        self.gestor = gestor
+
+    def run(self):
+        for numero_cancelacion,numero_pedido,tiempo in self.cancelaciones:
+            self.gestor.cancelar(numero_pedido)
+            time.sleep(tiempo)
+
