@@ -1,4 +1,5 @@
 import threading
+import time
 
 
 class GestorInventario:
@@ -6,6 +7,7 @@ class GestorInventario:
         self._stock = dict(stock_inicial)
         self._lock = threading.RLock()
         self._condicion = threading.Condition(self._lock)
+        self.evento = threading.Event()
 
     def consultar(self, producto):
         with self._lock:
@@ -48,3 +50,9 @@ class GestorInventario:
             for producto in self._stock:
                 copia[producto] = self.consultar(producto)
             return copia
+
+    def pausa(self,evento):
+        time.sleep(3)
+        evento.clear()
+        time.sleep(4)
+        evento.set()

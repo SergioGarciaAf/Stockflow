@@ -3,14 +3,24 @@ import time
  
  
 class Caja(threading.Thread):
-    def __init__(self, nombre, pedidos, terminales, gestor):
+    def __init__(self, nombre, pedidos, terminales, gestor,evento):
         super().__init__(name=nombre)
         self.pedidos = list(pedidos)
         self.terminales = terminales
         self.gestor = gestor
+        self.evento = evento
+        self.lista = [self.name,[],[],[]]
+        self.bandera = "nada"
  
     def run(self):
         for numero_pedido, producto, unidades in self.pedidos:
+            self.evento.wait()
+            self.bandera = "esperando"
+            self.lista[2].append(numero_pedido)
+            if self.bandera == "esperando":
+                self.lista[3].append(numero_pedido)
+            elif self.bandera == "nada":
+                self.lista[1].append(numero_pedido)
             print(f"[{self.name}] espero terminal para {numero_pedido}")
             with self.terminales:
                 print(f"[{self.name}] COJO terminal")
@@ -46,3 +56,12 @@ class Revisor(threading.Thread):
         print(f"[{self.name}] he terminado mi parte -> espero en la barrera")
         self.barrera.wait()
         print(f"[{self.name}] barrera superada")
+
+class Pausa(threading.Thread):
+    def __init__(self, gestor,evento):
+        super().__init__(name="Pausa")
+        self.gestor = gestor
+        self.evento = evento
+
+    def run(self):
+        self.gestor.pausa(self.evento)
